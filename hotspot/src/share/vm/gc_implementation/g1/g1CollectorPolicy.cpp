@@ -347,8 +347,12 @@ void G1CollectorPolicy::post_heap_initialize() {
   }
 }
 
+/**
+ * 初始化新生代大小参数，根据不同的 jvm 参数判断计算新生代的大小，供后续使用
+ */
 G1YoungGenSizer::G1YoungGenSizer() : _sizer_kind(SizerDefaults), _adaptive_size(true),
         _min_desired_young_length(0), _max_desired_young_length(0) {
+    // 如果设置了 NewRatio 且同时设置了 NewSize 或 MaxNewSize 的情况下，则 NewRatio 被忽略
   if (FLAG_IS_CMDLINE(NewRatio)) {
     if (FLAG_IS_CMDLINE(NewSize) || FLAG_IS_CMDLINE(MaxNewSize)) {
       warning("-XX:NewSize and -XX:MaxNewSize override -XX:NewRatio");
@@ -359,6 +363,7 @@ G1YoungGenSizer::G1YoungGenSizer() : _sizer_kind(SizerDefaults), _adaptive_size(
     }
   }
 
+  // 参数传递有问题，最小值大于最大值
   if (NewSize > MaxNewSize) {
     if (FLAG_IS_CMDLINE(MaxNewSize)) {
       warning("NewSize (" SIZE_FORMAT "k) is greater than the MaxNewSize (" SIZE_FORMAT "k). "
@@ -368,6 +373,7 @@ G1YoungGenSizer::G1YoungGenSizer() : _sizer_kind(SizerDefaults), _adaptive_size(
     MaxNewSize = NewSize;
   }
 
+  // 根据参数计算分区的个数
   if (FLAG_IS_CMDLINE(NewSize)) {
     _min_desired_young_length = MAX2((uint) (NewSize / HeapRegion::GrainBytes),
                                      1U);
@@ -388,16 +394,32 @@ G1YoungGenSizer::G1YoungGenSizer() : _sizer_kind(SizerDefaults), _adaptive_size(
   }
 }
 
+/**
+ * 使用 G1NewSizePercent 来计算新生代的最小值
+ * @param new_number_of_heap_regions hr 的总数
+ * @return
+ */
 uint G1YoungGenSizer::calculate_default_min_length(uint new_number_of_heap_regions) {
   uint default_value = (new_number_of_heap_regions * G1NewSizePercent) / 100;
   return MAX2(1U, default_value);
 }
 
+/**
+ * 使用 G1MaxNewSizePercent 来计算新生代的最大值
+ * @param new_number_of_heap_regions  hr 的总数
+ * @return
+ */
 uint G1YoungGenSizer::calculate_default_max_length(uint new_number_of_heap_regions) {
   uint default_value = (new_number_of_heap_regions * G1MaxNewSizePercent) / 100;
   return MAX2(1U, default_value);
 }
 
+/**
+ * 根据不同的参数输入来计算大小，在初始化时被调用，在堆空间改变时也会被调用
+ * @param number_of_heap_regions hr 的总数
+ * @param min_young_length
+ * @param max_young_length
+ */
 void G1YoungGenSizer::recalculate_min_max_young_length(uint number_of_heap_regions, uint* min_young_length, uint* max_young_length) {
   assert(number_of_heap_regions > 0, "Heap must be initialized");
 
@@ -1376,9 +1398,19 @@ void G1CollectorPolicy::update_recent_gc_times(double end_time_sec,
   _prev_collection_pause_end_ms = end_time_sec * 1000.0;
 }
 
+/**
+ * 分区扩容
+ * @return
+ */
 size_t G1CollectorPolicy::expansion_amount() {
+    // 先根据历史信息获取平均 GC 信息
   double recent_gc_overhead = recent_avg_pause_time_ratio() * 100.0;
   double threshold = _gc_overhead_perc;
+  /*
+   * G1 GC 的时候与应用时间占比超过阈值才进行动态扩展，这个阈值的值为：
+   * _gc_overhead_perc = 100.0 * (1.0 / (1.0 + GCTimeRatio));
+   * -XX:GCTimeRatio 参数默认为9 即超过10%才会扩张内存
+   */
   if (recent_gc_overhead > threshold) {
     // We will double the existing space, or take
     // G1ExpandByPercentOfAvailable % of the available expansion

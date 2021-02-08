@@ -104,7 +104,16 @@ size_t HeapRegion::max_region_size() {
   return HeapRegionBounds::max_size();
 }
 
+/**
+ * 启发式推断出 HR 的大小
+ * @param initial_heap_size  -xms 的设置 默认0
+ * @param max_heap_size  -xmx 的设置 默认 96mb
+ */
 void HeapRegion::setup_heap_region_size(size_t initial_heap_size, size_t max_heap_size) {
+    /*
+     * 判断是否是设置过堆分区大小，如果有则使用；没有，则根据初始内存和最大分配内存，获得平均值，
+     * 并根据HR的个数得到分区的大小，和分区的下限比较，取两者的最大值
+     */
   uintx region_size = G1HeapRegionSize;
   if (FLAG_IS_DEFAULT(G1HeapRegionSize)) {
     size_t average_heap_size = (initial_heap_size + max_heap_size) / 2;
@@ -112,6 +121,7 @@ void HeapRegion::setup_heap_region_size(size_t initial_heap_size, size_t max_hea
                        (uintx) HeapRegionBounds::min_size());
   }
 
+  // 对 region_size 按 2 的幂次对齐，并且保证其落在上下限范围内
   int region_size_log = log2_long((jlong) region_size);
   // Recalculate the region size to make sure it's a power of
   // 2. This means that region_size is the largest power of 2 that's
@@ -119,6 +129,7 @@ void HeapRegion::setup_heap_region_size(size_t initial_heap_size, size_t max_hea
   region_size = ((uintx)1 << region_size_log);
 
   // Now make sure that we don't go over or under our limits.
+  // 确保 region_size 落在 [1MB，32MB] 之间
   if (region_size < HeapRegionBounds::min_size()) {
     region_size = HeapRegionBounds::min_size();
   } else if (region_size > HeapRegionBounds::max_size()) {
@@ -126,6 +137,7 @@ void HeapRegion::setup_heap_region_size(size_t initial_heap_size, size_t max_hea
   }
 
   // And recalculate the log.
+  // 根据 region_size 计算一些变量，如卡表大小
   region_size_log = log2_long((jlong) region_size);
 
   // Now, set up the globals.
