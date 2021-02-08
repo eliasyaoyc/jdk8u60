@@ -315,6 +315,16 @@ public:
   bool verify_young_ages();
 #endif // PRODUCT
 
+  /**
+   * davg(): 表示衰减均值
+   * sigma()： 返回一个系数，来自G1ConfidencePercent(默认50，sigma为0.5) 表示信任度
+   * dsd()： 衰减标准偏差
+   * confidence_factor()：可信度相关系数，confidence_factor当样本数据不足时（小于5个）取一个大于1的值，并且样本数据越少该值越大。
+   * 当样本数据大于5时confidence_factor取值为1。这是为了弥补样本数据不足，起到补偿作用。
+   *
+   * @param seq
+   * @return
+   */
   double get_new_prediction(TruncatedSeq* seq) {
     return MAX2(seq->davg() + sigma() * seq->dsd(),
                 seq->davg() * confidence_factor(seq->num()));
