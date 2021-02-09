@@ -2094,11 +2094,12 @@ jint G1CollectedHeap::initialize() {
                                                 concurrent_g1_refine()->red_zone(),
                                                 Shared_DirtyCardQ_lock);
 
-  dirty_card_queue_set().initialize(NULL, // Should never be called by the Java code
-                                    DirtyCardQ_CBL_mon,
+  // DCQS 初始化代码
+  dirty_card_queue_set().initialize(NULL, // Should never be called by the Java code 只能由 jvm 调用
+                                    DirtyCardQ_CBL_mon,  // 全局 Monitor
                                     DirtyCardQ_FL_lock,
-                                    -1, // never trigger processing
-                                    -1, // no limit on length
+                                    -1, // never trigger processing 设置无需处理
+                                    -1, // no limit on length  不设置GCQS 的长度
                                     Shared_DirtyCardQ_lock,
                                     &JavaThread::dirty_card_queue_set());
 

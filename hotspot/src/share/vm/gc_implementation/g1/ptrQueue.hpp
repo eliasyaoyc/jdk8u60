@@ -83,6 +83,7 @@ public:
 
   void reset() { if (_buf != NULL) _index = _sz; }
 
+  // 把对象放入 DCQ 中，实际上 DQC 就是一个buffer
   void enqueue(volatile void* ptr) {
     enqueue((void*)(ptr));
   }

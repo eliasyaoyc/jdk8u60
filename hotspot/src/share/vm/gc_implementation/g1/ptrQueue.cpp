@@ -56,16 +56,22 @@ void PtrQueue::flush_impl() {
   }
 }
 
-
+/**
+ * 判断当前DCQ是否还有空间，如果有则直接加入，如果没有则调用handle_zero_index，它再调用process_or_enqueue_complete_buffer并根据返回值决定是否申请新的DCQ
+ *
+ * @param ptr
+ */
 void PtrQueue::enqueue_known_active(void* ptr) {
   assert(0 <= _index && _index <= _sz, "Invariant.");
   assert(_index == 0 || _buf != NULL, "invariant");
 
+  // index 为0 表示 DCQ 已经满了，需要把 DCQ 假如到 DCQS 中，并申请新的 DCQ
   while (_index == 0) {
     handle_zero_index();
   }
 
   assert(_index > 0, "postcondition");
+  // 在这里 无论如何都会有合适的 DCQ 可以使用，因为满的 DCQ 会申请新的，直接加入对象
   _index -= oopSize;
   _buf[byte_index_to_index((int)_index)] = ptr;
   assert(0 <= _index && _index <= _sz, "Invariant.");
@@ -139,11 +145,15 @@ void PtrQueueSet::reduce_free_list() {
   }
 }
 
+/**
+ * 处理 DCQ 满的情况
+ */
 void PtrQueue::handle_zero_index() {
   assert(_index == 0, "Precondition.");
 
   // This thread records the full buffer and allocates a new one (while
   // holding the lock if there is one).
+  // 二次判断，是为了防止DCQ 满的情况下同一线程多次进入分配
   if (_buf != NULL) {
     if (!should_enqueue_buffer()) {
       assert(_index > 0, "the buffer can only be re-used if it's not full");
@@ -169,9 +179,12 @@ void PtrQueue::handle_zero_index() {
       // preventing the subsequent the multiple enqueue, and
       // install a newly allocated buffer below.
 
+      // 进入这里 说明使用的是全局的 DCQ， 这里需要考虑多线程的情况，大致可以总结为：
+      // 把全局DCQ 放入到 DCQS 中，然后在为全局的 DCQ 申请新的空间，这里引入一个局部变量buf 的目的在于处理多线程竞争
       void** buf = _buf;   // local pointer to completed buffer
       _buf = NULL;         // clear shared _buf field
 
+      // 此方法和后面的 process_or_enqueue_complete_buffer 几乎是一样的，唯一的区别就是锁的处理，因为这里是全局 DCQ 所以涉及加锁和解锁
       locking_enqueue_completed_buffer(buf);  // enqueue completed buffer
 
       // While the current thread was enqueuing the buffer another thread
@@ -180,10 +193,13 @@ void PtrQueue::handle_zero_index() {
       // thread doesn't overwrite the buffer allocated by the other thread
       // and potentially losing some dirtied cards.
 
+      // 如果buffer 不为null 说明其他线程已经成功的为全局DCQ 申请到空间了，直接返回
       if (_buf != NULL) return;
     } else {
+        // 此处 就是普通的 DCQ 处理
       if (qset()->process_or_enqueue_complete_buffer(_buf)) {
         // Recycle the buffer. No allocation.
+        // 返回值为true，说明 mutator 暂停执行应用代码，帮助处理 DCQ，所以此时可以重用DCQ
         _sz = qset()->buffer_size();
         _index = _sz;
         return;
@@ -197,9 +213,11 @@ void PtrQueue::handle_zero_index() {
   assert(0 <= _index && _index <= _sz, "Invariant.");
 }
 
+// 处理 DCQ，根据情况判断 是否需要 Mutator 介入
 bool PtrQueueSet::process_or_enqueue_complete_buffer(void** buf) {
   if (Thread::current()->is_Java_thread()) {
     // We don't lock. It is fine to be epsilon-precise here.
+    // 条件为true， 说明需要，没有加速，允许竞争，原因在于 如果条件不满足 最坏的结果就是 Mutator 处理
     if (_max_completed_queue == 0 || _max_completed_queue > 0 &&
         _n_completed_buffers >= _max_completed_queue + _completed_queue_padding) {
       bool b = mut_process_buffer(buf);
@@ -210,10 +228,13 @@ bool PtrQueueSet::process_or_enqueue_complete_buffer(void** buf) {
     }
   }
   // The buffer will be enqueued. The caller will have to get a new one.
+  // 把buffer 插入DCQS 中，加入之后调用者将会分配一个新的 buffer
+  // 是否生成新的 buffer 依赖于返回值，false 表示需要新的 buffer
   enqueue_complete_buffer(buf);
   return false;
 }
 
+// 把 DCQ 形成一个链表
 void PtrQueueSet::enqueue_complete_buffer(void** buf, size_t index) {
   MutexLockerEx x(_cbl_mon, Mutex::_no_safepoint_check_flag);
   BufferNode* cbn = BufferNode::new_from_buffer(buf);
@@ -228,10 +249,12 @@ void PtrQueueSet::enqueue_complete_buffer(void** buf, size_t index) {
   }
   _n_completed_buffers++;
 
+  // 这里判断是否需要由Refine线程工作，如果没有线程工作通过 notify 通知启动
   if (!_process_completed && _process_completed_threshold >= 0 &&
       _n_completed_buffers >= _process_completed_threshold) {
     _process_completed = true;
     if (_notify_when_complete)
+        // 这里其实就是通知0号Refine线程
       _cbl_mon->notify();
   }
   debug_only(assert_completed_buffer_list_len_correct_locked());

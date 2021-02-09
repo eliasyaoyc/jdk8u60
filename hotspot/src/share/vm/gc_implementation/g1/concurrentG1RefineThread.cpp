@@ -162,6 +162,13 @@ void ConcurrentG1RefineThread::deactivate() {
   }
 }
 
+/**
+ * Refine线程的初始化是在GC管理器初始化的时候进行，但是如果没有足够多的引用关系变更，这些Refine线程都是空转，所以需要一个机制能动态激活和冻结线程，
+ * JVM通过wait和notify机制来实现。设计思想是：从0到n-1线程（n表示Refine线程的个数），都是由前一个线程发现自己太忙，激活后一个；
+ * 后一个线程发现自己太闲的时候则主动冻结自己。那么第0个线程在何时被激活？第0个线程是由正在运行的Java线程来激活的，当Java线程（Mutator）尝试把修改的引用放入到队列时，
+ * 如果0号线程还没激活，则发送notify信号激活它。所以在设计的时候，0号线程可能会由任意一个Mutator来通知，而1号到n-1号线程只能有前一个标号的Refine线程通知。因为0号线程可以由任意Mutator通知，
+ * 所以0号线程等待的Monitor是一个全局变量，而1号到n-1号线程中的Monitor则是局部变量。
+ */
 void ConcurrentG1RefineThread::run() {
   initialize_in_thread();
   wait_for_universe_init();
