@@ -177,6 +177,13 @@ HeapWord* CollectedHeap::common_mem_allocate_init(KlassHandle klass, size_t size
   return obj;
 }
 
+/**
+ * 从TLAB 中创建对象
+ * @param klass
+ * @param thread
+ * @param size
+ * @return
+ */
 HeapWord* CollectedHeap::allocate_from_tlab(KlassHandle klass, Thread* thread, size_t size) {
   assert(UseTLAB, "should use UseTLAB");
 

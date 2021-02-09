@@ -913,6 +913,7 @@ HeapWord* G1CollectedHeap::attempt_allocation_slow(size_t word_size,
 
     {
       MutexLockerEx x(Heap_lock);
+      // 加锁分配
       result = _allocator->mutator_alloc_region(context)->attempt_allocation_locked(word_size,
                                                                                     false /* bot_updates */);
       if (result != NULL) {
@@ -952,6 +953,7 @@ HeapWord* G1CollectedHeap::attempt_allocation_slow(size_t word_size,
 
     if (should_try_gc) {
       bool succeeded;
+      // GCLocker 没有进入临界区，可以进行垃圾回收
       result = do_collection_pause(word_size, gc_count_before, &succeeded,
                                    GCCause::_g1_inc_collection_pause);
       if (result != NULL) {
@@ -963,11 +965,13 @@ HeapWord* G1CollectedHeap::attempt_allocation_slow(size_t word_size,
         // If we get here we successfully scheduled a collection which
         // failed to allocate. No point in trying to allocate
         // further. We'll just return NULL.
+        // 稍后可以进行回收，可以先返回
         MutexLockerEx x(Heap_lock);
         *gc_count_before_ret = total_collections();
         return NULL;
       }
     } else {
+        // JNI 进入临界区，判断是否达到分配次数阈值
       if (*gclocker_retry_count_ret > GCLockerRetryAllocationCount) {
         MutexLockerEx x(Heap_lock);
         *gc_count_before_ret = total_collections();

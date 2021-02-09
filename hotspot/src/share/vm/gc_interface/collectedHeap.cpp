@@ -261,19 +261,38 @@ void CollectedHeap::check_for_valid_allocation_state() {
 }
 #endif
 
+/**
+ * TLAB 慢速分配，首先先在 collectedHeap.inline 中 allocate_from_tlab 中分配，如果分配失败则调用此方法。
+ * 情况1：TLAB 的剩余空间是否太小，如果很小，即说明这个空间通常不满足对象的分配，所以最好丢弃，丢弃的方法就是填充一个dummy 对象，然后申请新的 TLAB 来分配对象
+ * 情况2：如果不能丢弃，说明 TLAB 剩余空间并不小，能满足很多对象的分配，所以不能丢弃这个TLAB，否则内存浪费很多，此时可以把对象分配到堆中，不使用TLAB 分配，所以可以直接返回
+ *
+ * @param klass
+ * @param thread
+ * @param size
+ * @return
+ */
 HeapWord* CollectedHeap::allocate_from_tlab_slow(KlassHandle klass, Thread* thread, size_t size) {
 
   // Retain tlab and allocate object in shared space if
   // the amount free in the tlab is too large to discard.
+
+  // 判断当前线程的 tlab 剩余空间是否可以丢弃，如果剩余空间大于阈值则保留，其中阈值为
+  // refill_waste_limit,它由 desired size 和 TLABRefillWasteFraction 计算得到
   if (thread->tlab().free() > thread->tlab().refill_waste_limit()) {
+      // 不能丢弃，根据 TLABRefillWasteFraction 更新 refill_waste 的阈值
     thread->tlab().record_slow_allocation(size);
+    // 返回null 说明在 Eden/HeapRegion 中分配
     return NULL;
   }
 
   // Discard tlab and allocate a new one.
   // To minimize fragmentation, the last TLAB may be smaller than the rest.
+
+  // 到这里了说明 无法分配，tlab 剩余内存太小了，则丢弃 重新分配一个 tlab，尽可能减少内存碎片
+  // 计算需要分配的大小
   size_t new_tlab_size = thread->tlab().compute_size(size);
 
+  // 清除旧的tlab，其目的就是为了让堆保持 parsable 可解析
   thread->tlab().clear_before_allocation();
 
   if (new_tlab_size == 0) {
@@ -281,13 +300,16 @@ HeapWord* CollectedHeap::allocate_from_tlab_slow(KlassHandle klass, Thread* thre
   }
 
   // Allocate a new TLAB...
+  // 开始分配tlab
   HeapWord* obj = Universe::heap()->allocate_new_tlab(new_tlab_size);
   if (obj == NULL) {
     return NULL;
   }
 
+  // 发送分配成功的事件，用于统计分配信息
   AllocTracer::send_allocation_in_new_tlab_event(klass, new_tlab_size * HeapWordSize, size * HeapWordSize);
 
+  // 是否把内存空间清零
   if (ZeroTLAB) {
     // ..and clear it.
     Copy::zero_to_words(obj, new_tlab_size);
@@ -301,6 +323,7 @@ HeapWord* CollectedHeap::allocate_from_tlab_slow(KlassHandle klass, Thread* thre
     Copy::fill_to_words(obj + hdr_size, new_tlab_size - hdr_size, badHeapWordVal);
 #endif // ASSERT
   }
+  // 分配对象，并设置 TLAB 的 start、top、end 等信息
   thread->tlab().fill(obj, obj + size, new_tlab_size);
   return obj;
 }
